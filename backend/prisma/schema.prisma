@@ -1,0 +1,634 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// ENUMS - Tipos enumerados para el sistema
+// ============================================
+
+// Roles de usuario en el sistema
+enum Role {
+  SUPER_ADMIN    // Administrador del sistema
+  COMUNA_ADMIN   // Administrador de comuna
+  BUSINESS_OWNER // Dueño del comercio
+  BUSINESS_STAFF // Personal del comercio
+  CUSTOMER       // Cliente final
+}
+
+// Estados de usuario
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  PENDING_VERIFICATION
+}
+
+// Verticales disponibles en la plataforma
+enum Vertical {
+  SALUD
+  BELLEZA
+  DATEFIT
+  SERVICIOS
+  BIENESTAR
+}
+
+// Estados de comercio
+enum BusinessStatus {
+  PENDING    // Pendiente de aprobación
+  ACTIVE     // Activo
+  INACTIVE   // Inactivo
+  SUSPENDED  // Suspendido
+  REJECTED   // Rechazado
+}
+
+// Tipos de promoción
+enum PromotionType {
+  PERCENTAGE      // Porcentaje de descuento
+  FIXED_AMOUNT    // Monto fijo
+  BUY_X_GET_Y     // Compra X lleva Y
+  BUNDLE          // Paquete
+  FLASH_SALE      // Venta flash
+}
+
+// Estados de promoción
+enum PromotionStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  EXPIRED
+  SCHEDULED
+}
+
+// Estados de reserva
+enum BookingStatus {
+  PENDING      // Pendiente de confirmación
+  CONFIRMED    // Confirmada
+  IN_PROGRESS  // En curso
+  COMPLETED    // Completada
+  CANCELLED    // Cancelada
+  NO_SHOW      // No asistió
+}
+
+// Estados de pago
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  REFUNDED
+  CANCELLED
+}
+
+// Métodos de pago
+enum PaymentMethod {
+  MERCADOPAGO
+  CASH
+  TRANSFER
+  CARD
+  WALLET
+}
+
+// Tipos de servicio
+enum ServiceType {
+  APPOINTMENT  // Cita programada
+  EVENT        // Evento
+  CLASS        // Clase
+  CONSULTATION // Consulta
+}
+
+// ============================================
+// MODELOS PRINCIPALES
+// ============================================
+
+// Modelo de Comuna - Sistema multi-tenant
+model Comuna {
+  id          String   @id @default(uuid())
+  name        String   // Nombre de la comuna
+  slug        String   @unique // Identificador único (URL-friendly)
+  description String?  // Descripción
+  logoUrl     String?  // URL del logo
+  bannerUrl   String?  // URL del banner
+  primaryColor String? @default("#FF6B9D") // Color primario
+  secondaryColor String? @default("#4ECDC4") // Color secundario
+  
+  // Configuración
+  settings    Json?    // Configuración JSON flexible
+  
+  // Relaciones
+  users       User[]
+  businesses  Business[]
+  promotions  Promotion[]
+  
+  // Metadata
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("comunas")
+}
+
+// Modelo de Usuario
+model User {
+  id          String   @id @default(uuid())
+  email       String   @unique
+  password    String   // Hash bcrypt
+  firstName   String
+  lastName    String
+  phone       String?
+  avatarUrl   String?
+  
+  // Rol y estado
+  role        Role     @default(CUSTOMER)
+  status      UserStatus @default(PENDING_VERIFICATION)
+  
+  // Verificación
+  emailVerified   Boolean @default(false)
+  phoneVerified   Boolean @default(false)
+  verificationToken String?
+  
+  // Multi-tenant
+  comunaId    String?
+  comuna      Comuna?  @relation(fields: [comunaId], references: [id])
+  
+  // Relaciones según rol
+  ownedBusinesses Business[] @relation("BusinessOwner")
+  staffBusinesses BusinessStaff[]
+  bookings        Booking[]  @relation("CustomerBookings")
+  payments        Payment[]
+  reviews         Review[]
+  favorites       Favorite[]
+  
+  // Notificaciones
+  notifications   Notification[]
+  
+  // Metadata
+  lastLoginAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("users")
+}
+
+// Modelo de Comercio
+model Business {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique
+  description String?
+  
+  // Categorización
+  vertical    Vertical
+  categoryId  String
+  category    Category @relation(fields: [categoryId], references: [id])
+  
+  // Contacto y ubicación
+  email       String
+  phone       String
+  address     String
+  latitude    Float?
+  longitude   Float?
+  
+  // Media
+  logoUrl     String?
+  bannerUrl   String?
+  galleryUrls String[] // Array de URLs de imágenes
+  
+  // Horarios (JSON flexible)
+  schedule    Json?    // { "monday": { "open": "09:00", "close": "18:00" }, ... }
+  
+  // Configuración
+  settings    Json?    // Configuración específica del negocio
+  
+  // Multi-tenant
+  comunaId    String
+  comuna      Comuna   @relation(fields: [comunaId], references: [id])
+  
+  // Dueño
+  ownerId     String
+  owner       User     @relation("BusinessOwner", fields: [ownerId], references: [id])
+  
+  // Relaciones
+  staff       BusinessStaff[]
+  services    Service[]
+  promotions  Promotion[]
+  bookings    Booking[]
+  reviews     Review[]
+  favorites   Favorite[]
+  
+  // Estado
+  status      BusinessStatus @default(PENDING)
+  isFeatured  Boolean @default(false)
+  
+  // Metadata
+  rating      Float   @default(0)
+  reviewCount Int     @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("businesses")
+}
+
+// Modelo de Personal del Comercio
+model BusinessStaff {
+  id          String   @id @default(uuid())
+  
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Rol específico en el negocio
+  role        String   // ej: "stylist", "trainer", "doctor", "admin"
+  specialties String[] // Especialidades
+  
+  // Horario del staff
+  schedule    Json?    // Disponibilidad específica
+  
+  // Estado
+  isActive    Boolean  @default(true)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@unique([businessId, userId])
+  @@map("business_staff")
+}
+
+// Modelo de Categoría
+model Category {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique
+  description String?
+  iconUrl     String?
+  
+  // Jerarquía
+  parentId    String?
+  parent      Category? @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children    Category[] @relation("CategoryHierarchy")
+  
+  // Clasificación
+  vertical    Vertical
+  
+  // Relaciones
+  businesses  Business[]
+  services    Service[]
+  
+  // Estado
+  isActive    Boolean  @default(true)
+  order       Int      @default(0)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("categories")
+}
+
+// Modelo de Servicio
+model Service {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  
+  // Clasificación
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  
+  categoryId  String?
+  category    Category? @relation(fields: [categoryId], references: [id])
+  
+  // Detalles
+  duration    Int      // Duración en minutos
+  price       Decimal  @db.Decimal(10, 2)
+  comparePrice Decimal? @db.Decimal(10, 2) // Precio anterior (para mostrar descuento)
+  
+  // Media
+  imageUrl    String?
+  
+  // Configuración
+  serviceType ServiceType @default(APPOINTMENT)
+  maxCapacity Int      @default(1) // Capacidad máxima por slot
+  bufferTime  Int      @default(0) // Tiempo de buffer entre servicios (min)
+  
+  // Personal que puede realizar el servicio
+  staff       ServiceStaff[]
+  
+  // Relaciones
+  bookings    Booking[]
+  
+  // Estado
+  isActive    Boolean  @default(true)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("services")
+}
+
+// Relación Servicio-Personal (muchos a muchos)
+model ServiceStaff {
+  id        String   @id @default(uuid())
+  serviceId String
+  service   Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  staffId   String
+  staff     BusinessStaff @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  
+  @@unique([serviceId, staffId])
+  @@map("service_staff")
+}
+
+// Modelo de Promoción
+model Promotion {
+  id          String   @id @default(uuid())
+  title       String
+  description String?
+  
+  // Clasificación
+  type        PromotionType
+  vertical    Vertical
+  
+  // Valores de la promoción
+  discountValue   Decimal  @db.Decimal(10, 2) // Porcentaje o monto fijo
+  minPurchase   Decimal? @db.Decimal(10, 2)  // Compra mínima
+  maxDiscount   Decimal? @db.Decimal(10, 2)  // Descuento máximo
+  
+  // Vigencia
+  startDate   DateTime
+  endDate     DateTime
+  
+  // Media
+  imageUrl    String?
+  
+  // Multi-tenant
+  comunaId    String
+  comuna      Comuna   @relation(fields: [comunaId], references: [id])
+  
+  // Comercio específico (opcional, si es null aplica a toda la comuna)
+  businessId  String?
+  business    Business? @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  
+  // Servicios incluidos (si aplica)
+  applicableServices Json? // Array de serviceIds
+  
+  // Límites
+  usageLimit  Int?     // Límite total de usos
+  usageCount  Int      @default(0)
+  perUserLimit Int?    // Límite por usuario
+  
+  // Código de cupón (opcional)
+  couponCode  String?  @unique
+  
+  // Relaciones
+  bookings    Booking[]
+  
+  // Estado
+  status      PromotionStatus @default(DRAFT)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("promotions")
+}
+
+// Modelo de Reserva
+model Booking {
+  id          String   @id @default(uuid())
+  
+  // Referencia única para QR
+  referenceCode String @unique @default(uuid())
+  
+  // Cliente
+  customerId  String
+  customer    User     @relation("CustomerBookings", fields: [customerId], references: [id])
+  
+  // Comercio y servicio
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id])
+  
+  serviceId   String
+  service     Service  @relation(fields: [serviceId], references: [id])
+  
+  // Personal asignado (opcional)
+  staffId     String?
+  staff       BusinessStaff? @relation(fields: [staffId], references: [id])
+  
+  // Fecha y hora
+  date        DateTime // Fecha de la reserva
+  startTime   DateTime // Hora de inicio
+  endTime     DateTime // Hora de fin (calculada)
+  
+  // Participantes
+  attendees   Int      @default(1)
+  attendeeDetails Json? // Detalles de los participantes
+  
+  // Notas
+  customerNotes String?
+  staffNotes    String?
+  
+  // Promoción aplicada
+  promotionId String?
+  promotion   Promotion? @relation(fields: [promotionId], references: [id])
+  discountAmount Decimal? @db.Decimal(10, 2)
+  
+  // Precios
+  subtotal    Decimal  @db.Decimal(10, 2)
+  taxAmount   Decimal  @db.Decimal(10, 2)
+  totalAmount Decimal  @db.Decimal(10, 2)
+  
+  // Pago
+  paymentId   String?
+  payment     Payment? @relation(fields: [paymentId], references: [id])
+  
+  // Estado
+  status      BookingStatus @default(PENDING)
+  statusHistory Json[]   // Historial de cambios de estado
+  
+  // QR para validación
+  qrCode      String?  // URL o data del QR
+  qrValidatedAt DateTime?
+  qrValidatedBy String?
+  
+  // Recordatorios
+  reminderSent Boolean @default(false)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("bookings")
+}
+
+// Modelo de Pago
+model Payment {
+  id          String   @id @default(uuid())
+  
+  // Referencia externa (MercadoPago, etc.)
+  externalId  String?  @unique
+  
+  // Usuario
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  
+  // Montos
+  amount      Decimal  @db.Decimal(10, 2)
+  currency    String   @default("ARS")
+  
+  // Método y estado
+  method      PaymentMethod
+  status      PaymentStatus @default(PENDING)
+  
+  // Detalles del método
+  methodDetails Json?  // Datos específicos según método
+  
+  // MercadoPago
+  mpPreferenceId String?
+  mpPaymentId    String?
+  mpPaymentType  String?
+  mpStatusDetail String?
+  
+  // Webhook
+  webhookData    Json?   // Datos recibidos del webhook
+  webhookReceivedAt DateTime?
+  
+  // Reembolso
+  refundedAmount Decimal? @db.Decimal(10, 2)
+  refundReason   String?
+  refundedAt     DateTime?
+  
+  // Relaciones
+  bookings    Booking[]
+  
+  // Metadata
+  ipAddress   String?
+  userAgent   String?
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("payments")
+}
+
+// Modelo de Reseña
+model Review {
+  id          String   @id @default(uuid())
+  
+  // Autor
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Comercio
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  
+  // Reserva asociada (opcional)
+  bookingId   String?  @unique
+  
+  // Calificación
+  rating      Int      // 1-5 estrellas
+  title       String?
+  comment     String?
+  
+  // Respuesta del negocio
+  businessResponse String?
+  businessRespondedAt DateTime?
+  
+  // Estado
+  isVerified  Boolean  @default(false) // Verificado que asistió
+  isVisible   Boolean  @default(true)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("reviews")
+}
+
+// Modelo de Favoritos
+model Favorite {
+  id          String   @id @default(uuid())
+  
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  
+  createdAt   DateTime @default(now())
+  
+  @@unique([userId, businessId])
+  @@map("favorites")
+}
+
+// Modelo de Notificación
+model Notification {
+  id          String   @id @default(uuid())
+  
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  // Contenido
+  type        String   // Tipo de notificación
+  title       String
+  message     String
+  data        Json?    // Datos adicionales
+  
+  // Estado
+  isRead      Boolean  @default(false)
+  readAt      DateTime?
+  
+  // Canales
+  pushSent    Boolean  @default(false)
+  emailSent   Boolean  @default(false)
+  smsSent     Boolean  @default(false)
+  
+  createdAt   DateTime @default(now())
+  
+  @@map("notifications")
+}
+
+// Modelo de Configuración del Sistema
+model SystemConfig {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       Json
+  description String?
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("system_config")
+}
+
+// Modelo de Auditoría
+model AuditLog {
+  id          String   @id @default(uuid())
+  
+  // Quién
+  userId      String?
+  userEmail   String?
+  userRole    String?
+  
+  // Qué
+  action      String   // CREATE, UPDATE, DELETE, LOGIN, etc.
+  entity      String   // Nombre de la entidad
+  entityId    String?  // ID de la entidad
+  
+  // Datos
+  oldData     Json?
+  newData     Json?
+  
+  // Contexto
+  ipAddress   String?
+  userAgent   String?
+  
+  createdAt   DateTime @default(now())
+  
+  @@map("audit_logs")
+}
